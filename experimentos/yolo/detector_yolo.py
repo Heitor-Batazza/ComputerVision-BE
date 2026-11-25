@@ -26,7 +26,7 @@ except ImportError:
     print("Instale com: .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt")
     raise SystemExit(1)
 
-RAIZ = Path(__file__).resolve().parent.parent
+RAIZ = Path(__file__).resolve().parents[2]
 PASTA_DATA = RAIZ / "data"
 ARQUIVO_CSV = PASTA_DATA / "resultados_yolo.csv"
 MODELO = RAIZ / "yolo11n.pt"
