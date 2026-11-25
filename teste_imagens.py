@@ -2,6 +2,7 @@ import cv2
 import time
 import csv
 from datetime import datetime
+from pathlib import Path
 import asyncio
 from fastapi import FastAPI, WebSocket
 import uvicorn
@@ -42,7 +43,7 @@ def rodar_camera():
     ultimo_tempo = {}
 
     # Prepara o arquivo CSV para salvar os dados da comparação
-    arquivo_csv = "resultados_video.csv"
+    arquivo_csv = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
     with open(arquivo_csv, mode="w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Horario", "Metodo", "Carro_ID", "Volta", "Tempo_s"])
