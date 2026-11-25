@@ -25,8 +25,10 @@ async def conexao(websocket: WebSocket):
 # Configura a câmera (tenta forçar 60 FPS na Logitech BRIO)
 def rodar_camera():
     global texto
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1)
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+    cap.set(cv2.CAP_PROP_EXPOSURE, -6)
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
     cap.set(cv2.CAP_PROP_FPS, 60)
 
     dicionario = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
