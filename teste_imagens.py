@@ -1,132 +1,165 @@
-import cv2
-import time
+import asyncio
 import csv
+import threading
+import time
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-import asyncio
-from fastapi import FastAPI, WebSocket
+
+import cv2
 import uvicorn
-import threading
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-texto = "Aguardando primeira volta"
+CAMERA = 1
+LARGURA, ALTURA, FPS = 1280, 720, 60
+EXPOSICAO = -8
+FAIXA = 0.8               # fração central analisada
+TEMPO_MINIMO_VOLTA = 1.5  # segundos
+INTERVALO_MAXIMO = 0.25   # idade máxima da posição anterior
+MOSTRAR_JANELA = True    # True só para alinhar a câmera
+ARQUIVO_CSV = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
+
+estado = {}        # carro -> últimos dados
+clientes = set()   # uma fila por navegador
+loop_servidor = None
+servidor_pronto = threading.Event()
 
 
-app = FastAPI()
+@asynccontextmanager
+async def ciclo_de_vida(app):
+    global loop_servidor
+    loop_servidor = asyncio.get_running_loop()
+    servidor_pronto.set()
+    yield
+
+
+app = FastAPI(lifespan=ciclo_de_vida)
+
 
 @app.websocket("/ws")
 async def conexao(websocket: WebSocket):
     await websocket.accept()
-    texto_anterior = ""
-    while True:
-        if texto != texto_anterior:
-            texto_anterior = texto
-            await websocket.send_json({"texto": texto})
-        await asyncio.sleep(1)
+    fila = asyncio.Queue()
+    for dados in estado.values():
+        fila.put_nowait(dados)
+    clientes.add(fila)
+    try:
+        while True:
+            await websocket.send_json(await fila.get())
+    except WebSocketDisconnect:
+        pass
+    finally:
+        clientes.discard(fila)
 
-# Configura a câmera (tenta forçar 60 FPS na Logitech BRIO)
-def rodar_camera():
-    global texto
-    cap = cv2.VideoCapture(1)
-    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
-    cap.set(cv2.CAP_PROP_EXPOSURE, -6)
+
+def distribuir(dados):
+    estado[dados["carro"]] = dados
+    for fila in clientes:
+        fila.put_nowait(dados)
+
+
+def publicar(dados):
+    loop_servidor.call_soon_threadsafe(distribuir, dados)
+
+def abrir_camera():
+    cap = cv2.VideoCapture(CAMERA, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        raise SystemExit(f"Não foi possível abrir a câmera {CAMERA}.")
+    cap.set(cv2.CAP_PROP_FPS, FPS)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, LARGURA)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ALTURA)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-    cap.set(cv2.CAP_PROP_FPS, 60)
+    cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+    cap.set(cv2.CAP_PROP_EXPOSURE, EXPOSICAO)
+    print("Câmera:", cap.get(cv2.CAP_PROP_FRAME_WIDTH), "x",
+          cap.get(cv2.CAP_PROP_FRAME_HEIGHT), "a", cap.get(cv2.CAP_PROP_FPS), "FPS")
+    return cap
 
+def rodar_camera():
     dicionario = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     detector = cv2.aruco.ArucoDetector(dicionario, cv2.aruco.DetectorParameters())
-
-    # Estado dos carrinhos
-    pos_anterior_x = {}
+    anterior = {}      # carro -> (x, instante)
     inicio_volta = {}
     voltas = {}
     melhor_volta = {}
-    ultimo_tempo = {}
 
-    # Prepara o arquivo CSV para salvar os dados da comparação
-    arquivo_csv = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
-    with open(arquivo_csv, mode="w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Horario", "Metodo", "Carro_ID", "Volta", "Tempo_s"])
+    cap = abrir_camera()
+    ARQUIVO_CSV.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(ARQUIVO_CSV, "w", newline="", encoding="utf-8") as arquivo:
+            escritor = csv.writer(arquivo)
+            escritor.writerow(["Horario", "Metodo", "Carro_ID", "Volta", "Tempo_s"])
 
-    tempo_frame_anterior = time.perf_counter()
+            while True:
+                ret, frame = cap.read()
+                agora = time.perf_counter()  # antes da detecção
+                if not ret:
+                    break
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+                largura = frame.shape[1]
+                x0 = int(largura * (1 - FAIXA) / 2)
+                linha_x = largura / 2 - x0
+                cinza = cv2.cvtColor(frame[:, x0:largura - x0], cv2.COLOR_BGR2GRAY)
+                cantos, ids, _ = detector.detectMarkers(cinza)
 
-        # Calcula o FPS atual
-        agora_frame = time.perf_counter()
-        fps = 1.0 / (agora_frame - tempo_frame_anterior)
-        tempo_frame_anterior = agora_frame
+                if ids is not None:
+                    for canto, carro in zip(cantos, ids.ravel().tolist()):
+                        x = float(canto[0][:, 0].mean())
+                        antes = anterior.get(carro)
+                        anterior[carro] = (x, agora)
 
-        altura, largura, _ = frame.shape
-        linha_x = largura // 2  # Linha de chegada no meio da tela
+                        if antes is None or agora - antes[1] > INTERVALO_MAXIMO:
+                            continue
+                        x_antes, t_antes = antes
+                        if not x_antes < linha_x <= x:
+                            continue
 
-        # Desenha a linha de chegada e o FPS
-        cv2.line(frame, (linha_x, 0), (linha_x, altura), (0, 0, 255), 3)
-        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                        # Instante estimado em que o centro tocou a linha
+                        fracao = (linha_x - x_antes) / (x - x_antes)
+                        t = t_antes + fracao * (agora - t_antes)
 
-        cantos, ids, _ = detector.detectMarkers(frame)
+                        if carro not in inicio_volta:
+                            inicio_volta[carro] = t
+                            voltas[carro] = 0
+                            publicar({"carro": carro, "voltas": 0, "ultimo": None, "melhor": None})
+                            continue
 
-        if ids is not None:
-            cv2.aruco.drawDetectedMarkers(frame, cantos)
+                        duracao = t - inicio_volta[carro]
+                        if duracao <= TEMPO_MINIMO_VOLTA:
+                            continue  # não reinicia o cronômetro
 
-            for i, id_array in enumerate(ids):
-                carro_id = int(id_array)
-                pontos = cantos[i][0]
-                cx = int(pontos[:, 0].mean())
-                cy = int(pontos[:, 1].mean())
+                        inicio_volta[carro] = t
+                        voltas[carro] += 1
+                        melhor_volta[carro] = min(duracao, melhor_volta.get(carro, duracao))
+                        publicar({"carro": carro, "voltas": voltas[carro],
+                                  "ultimo": round(duracao, 3), "melhor": round(melhor_volta[carro], 3)})
+                        escritor.writerow([datetime.now().strftime("%H:%M:%S.%f")[:-3],
+                                           "Video_ArUco", carro, voltas[carro], f"{duracao:.4f}"])
+                        arquivo.flush()
 
-                cv2.circle(frame, (cx, cy), 6, (0, 255, 0), -1)
+                if MOSTRAR_JANELA:
+                    if ids is not None:
+                        for canto in cantos:
+                            pontos = canto[0].astype(int) + (x0, 0)
+                            cv2.polylines(frame, [pontos], True, (0, 255, 0), 2)
+                    cv2.line(frame, (largura // 2, 0), (largura // 2, frame.shape[0]), (0, 0, 255), 1)
+                    cv2.imshow("Camera", frame)
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
-                # Detecta cruzamento da esquerda para a direita
-                if carro_id in pos_anterior_x:
-                    if pos_anterior_x[carro_id] < linha_x and cx >= linha_x:
-                        t_cruzamento = time.perf_counter()
-
-                        if carro_id in inicio_volta:
-                            duracao = t_cruzamento - inicio_volta[carro_id]
-                            
-                            # Filtro simples para evitar leitura dupla acidental (< 1.5s)
-                            if duracao > 1.5:
-                                voltas[carro_id] = voltas.get(carro_id, 0) + 1
-                                ultimo_tempo[carro_id] = duracao
-                                
-                                if carro_id not in melhor_volta or duracao < melhor_volta[carro_id]:
-                                    melhor_volta[carro_id] = duracao
-
-                                # Salva no CSV
-                                with open(arquivo_csv, mode="a", newline="") as f:
-                                    writer = csv.writer(f)
-                                    writer.writerow([datetime.now().strftime("%H:%M:%S.%f")[:-3], 
-                                                    "Video_ArUco", carro_id, voltas[carro_id], f"{duracao:.4f}"])
-                        else:
-                            voltas[carro_id] = 0
-
-                        inicio_volta[carro_id] = t_cruzamento
-
-                pos_anterior_x[carro_id] = cx
-
-        # Desenha o placar no canto superior esquerdo
-        y_texto = 70
-        for cid in sorted(voltas.keys()):
-            ult = f"{ultimo_tempo[cid]:.3f}s" if cid in ultimo_tempo else "--"
-            mel = f"{melhor_volta[cid]:.3f}s" if cid in melhor_volta else "--"
-            texto = f"Carro {cid} | Voltas: {voltas[cid]} | Ult: {ult} | Melhor: {mel}"
-            cv2.putText(frame, texto, (10, y_texto), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            y_texto += 30
-
-        cv2.imshow("Cronometro - Fluxo de Video", frame)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
 
 def subir_servidor():
     uvicorn.run(app, host="127.0.0.1", port=8000)
 
-threading.Thread(target=subir_servidor, daemon=True).start()
-rodar_camera()
+
+if __name__ == "__main__":
+    threading.Thread(target=subir_servidor, daemon=True).start()
+    if not servidor_pronto.wait(timeout=10):
+        raise SystemExit("O servidor não iniciou. A porta 8000 está em uso?")
+    rodar_camera()
