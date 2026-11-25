@@ -8,7 +8,7 @@ from fastapi import FastAPI, WebSocket
 import uvicorn
 import threading
 
-texto = "Aguardando primeira volta"
+placar = []
 
 
 app = FastAPI()
@@ -16,16 +16,16 @@ app = FastAPI()
 @app.websocket("/ws")
 async def conexao(websocket: WebSocket):
     await websocket.accept()
-    texto_anterior = ""
+    anterior = None
     while True:
-        if texto != texto_anterior:
-            texto_anterior = texto
-            await websocket.send_json({"texto": texto})
+        if placar != anterior:
+            anterior = list(placar)
+            await websocket.send_json({"carros": placar})
         await asyncio.sleep(1)
 
 # Configura a câmera (tenta forçar 60 FPS na Logitech BRIO)
 def rodar_camera():
-    global texto
+    global placar
     cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
     cap.set(cv2.CAP_PROP_EXPOSURE, -6)
@@ -41,6 +41,7 @@ def rodar_camera():
     voltas = {}
     melhor_volta = {}
     ultimo_tempo = {}
+    horario = {}
 
     # Prepara o arquivo CSV para salvar os dados da comparação
     arquivo_csv = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
@@ -95,6 +96,7 @@ def rodar_camera():
                             if duracao > 1.5:
                                 voltas[carro_id] = voltas.get(carro_id, 0) + 1
                                 ultimo_tempo[carro_id] = duracao
+                                horario[carro_id] = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                                 
                                 if carro_id not in melhor_volta or duracao < melhor_volta[carro_id]:
                                     melhor_volta[carro_id] = duracao
@@ -102,7 +104,7 @@ def rodar_camera():
                                 # Salva no CSV
                                 with open(arquivo_csv, mode="a", newline="") as f:
                                     writer = csv.writer(f)
-                                    writer.writerow([datetime.now().strftime("%H:%M:%S.%f")[:-3], 
+                                    writer.writerow([horario[carro_id], 
                                                     "Video_ArUco", carro_id, voltas[carro_id], f"{duracao:.4f}"])
                         else:
                             voltas[carro_id] = 0
@@ -113,15 +115,20 @@ def rodar_camera():
 
         # Desenha o placar no canto superior esquerdo
         y_texto = 70
-        linhas_placar = []
+        carros = []
         for cid in sorted(voltas.keys(), key=ordem):
             ult = f"{ultimo_tempo[cid]:.3f}s" if cid in ultimo_tempo else "--"
             mel = f"{melhor_volta[cid]:.3f}s" if cid in melhor_volta else "--"
             linha = f"Carro {cid} | Voltas: {voltas[cid]} | Ult: {ult} | Melhor: {mel}"
-            linhas_placar.append(linha)
+            carros.append({
+                "carro": cid,
+                "volta": voltas[cid],
+                "ultimo": f"{ultimo_tempo[cid]:.3f}" if cid in ultimo_tempo else "--",
+                "horario": horario[cid] if cid in horario else "--",
+            })
             cv2.putText(frame, linha, (10, y_texto), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             y_texto += 30
-        texto = "\n".join(linhas_placar)
+        placar = carros
 
         cv2.imshow("Cronometro - Fluxo de Video", frame)
 
