@@ -1,12 +1,52 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="fr">
 <head>
     <meta charset="utf-8">
-    <title>Cliente</title>
+    <title>Flux Vidéo</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 24px;
+        }
+
+        .metodos {
+            display: flex;
+            gap: 24px;
+            align-items: flex-start;
+        }
+
+        .metodo {
+            flex: 0 0 calc((100% - 48px) / 3);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+    </style>
 </head>
 <body>
-    <div id="status">
-        <p>Classificação</p>
+    <div class="metodos">
+        <section class="metodo">
+            <h1>Flux Vidéo</h1>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Voiture</th>
+                        <th>Tour</th>
+                        <th>Dernier tour</th>
+                        <th>Heure</th>
+                    </tr>
+                </thead>
+                <tbody id="linhas"></tbody>
+            </table>
+        </section>
     </div>
     <script src="cliente.js"></script>
 </body>

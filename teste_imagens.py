@@ -19,7 +19,7 @@ INTERVALO_MAXIMO = 0.25   # idade máxima da posição anterior
 MOSTRAR_JANELA = True    # True só para alinhar a câmera
 ARQUIVO_CSV = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
 
-estado = {}        # carro -> últimos dados
+placar = []        # última classificação enviada
 clientes = set()   # uma fila por navegador
 loop_servidor = None
 servidor_pronto = threading.Event()
@@ -40,26 +40,27 @@ app = FastAPI(lifespan=ciclo_de_vida)
 async def conexao(websocket: WebSocket):
     await websocket.accept()
     fila = asyncio.Queue()
-    for dados in estado.values():
-        fila.put_nowait(dados)
+    if placar:
+        fila.put_nowait(placar)
     clientes.add(fila)
     try:
         while True:
-            await websocket.send_json(await fila.get())
+            await websocket.send_json({"carros": await fila.get()})
     except WebSocketDisconnect:
         pass
     finally:
         clientes.discard(fila)
 
 
-def distribuir(dados):
-    estado[dados["carro"]] = dados
+def distribuir(carros):
+    global placar
+    placar = carros
     for fila in clientes:
-        fila.put_nowait(dados)
+        fila.put_nowait(carros)
 
 
-def publicar(dados):
-    loop_servidor.call_soon_threadsafe(distribuir, dados)
+def publicar(carros):
+    loop_servidor.call_soon_threadsafe(distribuir, carros)
 
 def abrir_camera():
     cap = cv2.VideoCapture(CAMERA, cv2.CAP_DSHOW)
@@ -83,6 +84,19 @@ def rodar_camera():
     inicio_volta = {}
     voltas = {}
     melhor_volta = {}
+    ultimo_tempo = {}
+    horario = {}
+
+    def classificacao():
+        # Mais voltas primeiro; no empate, quem cruzou a linha antes
+        ordem = sorted(voltas, key=lambda c: (-voltas[c], inicio_volta[c]))
+        return [{
+            "carro": c,
+            "volta": voltas[c],
+            "ultimo": f"{ultimo_tempo[c]:.3f}" if c in ultimo_tempo else "--",
+            "melhor": f"{melhor_volta[c]:.3f}" if c in melhor_volta else "--",
+            "horario": horario.get(c, "--"),
+        } for c in ordem]
 
     cap = abrir_camera()
     ARQUIVO_CSV.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +136,7 @@ def rodar_camera():
                         if carro not in inicio_volta:
                             inicio_volta[carro] = t
                             voltas[carro] = 0
-                            publicar({"carro": carro, "voltas": 0, "ultimo": None, "melhor": None})
+                            publicar(classificacao())
                             continue
 
                         duracao = t - inicio_volta[carro]
@@ -132,9 +146,10 @@ def rodar_camera():
                         inicio_volta[carro] = t
                         voltas[carro] += 1
                         melhor_volta[carro] = min(duracao, melhor_volta.get(carro, duracao))
-                        publicar({"carro": carro, "voltas": voltas[carro],
-                                  "ultimo": round(duracao, 3), "melhor": round(melhor_volta[carro], 3)})
-                        escritor.writerow([datetime.now().strftime("%H:%M:%S.%f")[:-3],
+                        ultimo_tempo[carro] = duracao
+                        horario[carro] = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        publicar(classificacao())
+                        escritor.writerow([horario[carro],
                                            "Video_ArUco", carro, voltas[carro], f"{duracao:.4f}"])
                         arquivo.flush()
 
