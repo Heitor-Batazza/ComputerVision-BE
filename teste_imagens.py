@@ -26,7 +26,7 @@ async def conexao(websocket: WebSocket):
 # Configura a câmera (tenta forçar 60 FPS na Logitech BRIO)
 def rodar_camera():
     global texto
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
     cap.set(cv2.CAP_PROP_EXPOSURE, -6)
     cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
@@ -49,6 +49,9 @@ def rodar_camera():
         writer.writerow(["Horario", "Metodo", "Carro_ID", "Volta", "Tempo_s"])
 
     tempo_frame_anterior = time.perf_counter()
+
+    def ordem(cid):
+        return (-voltas[cid], inicio_volta[cid])
 
     while True:
         ret, frame = cap.read()
@@ -110,12 +113,15 @@ def rodar_camera():
 
         # Desenha o placar no canto superior esquerdo
         y_texto = 70
-        for cid in sorted(voltas.keys()):
+        linhas_placar = []
+        for cid in sorted(voltas.keys(), key=ordem):
             ult = f"{ultimo_tempo[cid]:.3f}s" if cid in ultimo_tempo else "--"
             mel = f"{melhor_volta[cid]:.3f}s" if cid in melhor_volta else "--"
-            texto = f"Carro {cid} | Voltas: {voltas[cid]} | Ult: {ult} | Melhor: {mel}"
-            cv2.putText(frame, texto, (10, y_texto), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            linha = f"Carro {cid} | Voltas: {voltas[cid]} | Ult: {ult} | Melhor: {mel}"
+            linhas_placar.append(linha)
+            cv2.putText(frame, linha, (10, y_texto), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             y_texto += 30
+        texto = "\n".join(linhas_placar)
 
         cv2.imshow("Cronometro - Fluxo de Video", frame)
 

@@ -1,14 +1,17 @@
 const status = document.getElementById("status");
 const ws = new WebSocket("ws://127.0.0.1:8000/ws");
-const linhas = {};
 
 ws.onmessage = (evento) => {
     const dado = JSON.parse(evento.data);
-    const carro = dado.texto[6];
+    const titulo = status.firstElementChild;
 
-    if (!linhas[carro]) {
-        linhas[carro] = document.createElement("p");
-        status.appendChild(linhas[carro]);
+    status.replaceChildren(titulo);
+    for (const linha of dado.texto.split("\n")) {
+        if (!linha.startsWith("Carro ")) {
+            continue;
+        }
+        const p = document.createElement("p");
+        p.textContent = linha;
+        status.appendChild(p);
     }
-    linhas[carro].textContent = dado.texto;
 };
