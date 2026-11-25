@@ -10,17 +10,17 @@ import cv2
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-CAMERA = 1
+CAMERA = 0
 LARGURA, ALTURA, FPS = 1280, 720, 60
-EXPOSICAO = -8
-FAIXA = 0.8               # fração central analisada
-TEMPO_MINIMO_VOLTA = 1.5  # segundos
-INTERVALO_MAXIMO = 0.25   # idade máxima da posição anterior
-MOSTRAR_JANELA = True    # True só para alinhar a câmera
+EXPOSICAO = -7
+FAIXA = 0.8
+TEMPO_MINIMO_VOLTA = 1.5
+INTERVALO_MAXIMO = 0.25
+MOSTRAR_JANELA = True
 ARQUIVO_CSV = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
 
-placar = []        # última classificação enviada
-clientes = set()   # uma fila por navegador
+placar = []
+clientes = set()
 loop_servidor = None
 servidor_pronto = threading.Event()
 
@@ -66,7 +66,7 @@ def abrir_camera():
     cap = cv2.VideoCapture(CAMERA, cv2.CAP_DSHOW)
     if not cap.isOpened():
         raise SystemExit(f"Não foi possível abrir a câmera {CAMERA}.")
-    cap.set(cv2.CAP_PROP_FPS, FPS)
+    #cap.set(cv2.CAP_PROP_FPS, FPS)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, LARGURA)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, ALTURA)
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -74,13 +74,13 @@ def abrir_camera():
     cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
     cap.set(cv2.CAP_PROP_EXPOSURE, EXPOSICAO)
     print("Câmera:", cap.get(cv2.CAP_PROP_FRAME_WIDTH), "x",
-          cap.get(cv2.CAP_PROP_FRAME_HEIGHT), "a", cap.get(cv2.CAP_PROP_FPS), "FPS")
+        cap.get(cv2.CAP_PROP_FRAME_HEIGHT), "a", cap.get(cv2.CAP_PROP_FPS), "FPS")
     return cap
 
 def rodar_camera():
     dicionario = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     detector = cv2.aruco.ArucoDetector(dicionario, cv2.aruco.DetectorParameters())
-    anterior = {}      # carro -> (x, instante)
+    anterior = {}
     inicio_volta = {}
     voltas = {}
     melhor_volta = {}
@@ -88,7 +88,6 @@ def rodar_camera():
     horario = {}
 
     def classificacao():
-        # Mais voltas primeiro; no empate, quem cruzou a linha antes
         ordem = sorted(voltas, key=lambda c: (-voltas[c], inicio_volta[c]))
         return [{
             "carro": c,
@@ -107,7 +106,7 @@ def rodar_camera():
 
             while True:
                 ret, frame = cap.read()
-                agora = time.perf_counter()  # antes da detecção
+                agora = time.perf_counter()
                 if not ret:
                     break
 
@@ -150,7 +149,7 @@ def rodar_camera():
                         horario[carro] = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                         publicar(classificacao())
                         escritor.writerow([horario[carro],
-                                           "Video_ArUco", carro, voltas[carro], f"{duracao:.4f}"])
+                                        "Video_ArUco", carro, voltas[carro], f"{duracao:.4f}"])
                         arquivo.flush()
 
                 if MOSTRAR_JANELA:
