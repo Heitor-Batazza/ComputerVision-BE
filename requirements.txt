@@ -1,0 +1,10 @@
+# Nao instale o pacote opencv-python. Ele substitui o opencv-contrib-python
+# e o ArUco deixa de existir. O YOLO usa o cv2 deste pacote contrib.
+numpy==2.5.4
+opencv-contrib-python==5.0.0.93
+pip-system-certs==5.3
+torch==2.15.0
+torchvision==0.29.2
+ultralytics==8.4.212
+lap==0.5.14
+
