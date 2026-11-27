@@ -1,11 +1,8 @@
-import csv
 import json
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime
-from pathlib import Path
-
 import cv2
 
 CAMERA = 0
@@ -15,7 +12,6 @@ FAIXA = 0.8
 TEMPO_MINIMO_VOLTA = 1.5
 INTERVALO_MAXIMO = 0.25
 MOSTRAR_JANELA = True
-ARQUIVO_CSV = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
 # O servidor deste computador escuta na rede, mas a câmera fala com ele por aqui.
 URL_VOLTAS = "http://127.0.0.1:8000/voltas"
 
@@ -64,66 +60,59 @@ def rodar_camera():
     voltas = {}
 
     cap = abrir_camera()
-    ARQUIVO_CSV.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with open(ARQUIVO_CSV, "w", newline="", encoding="utf-8") as arquivo:
-            escritor = csv.writer(arquivo)
-            escritor.writerow(["Horario", "Metodo", "Carro_ID", "Volta", "Tempo_s"])
+        while True:
+            ret, frame = cap.read()
+            agora = time.perf_counter()
+            if not ret:
+                break
 
-            while True:
-                ret, frame = cap.read()
-                agora = time.perf_counter()
-                if not ret:
-                    break
+            largura = frame.shape[1]
+            x0 = int(largura * (1 - FAIXA) / 2)
+            linha_x = largura / 2 - x0
+            cinza = cv2.cvtColor(frame[:, x0:largura - x0], cv2.COLOR_BGR2GRAY)
+            cantos, ids, _ = detector.detectMarkers(cinza)
 
-                largura = frame.shape[1]
-                x0 = int(largura * (1 - FAIXA) / 2)
-                linha_x = largura / 2 - x0
-                cinza = cv2.cvtColor(frame[:, x0:largura - x0], cv2.COLOR_BGR2GRAY)
-                cantos, ids, _ = detector.detectMarkers(cinza)
+            if ids is not None:
+                for canto, carro in zip(cantos, ids.ravel().tolist()):
+                    x = float(canto[0][:, 0].mean())
+                    antes = anterior.get(carro)
+                    anterior[carro] = (x, agora)
 
-                if ids is not None:
-                    for canto, carro in zip(cantos, ids.ravel().tolist()):
-                        x = float(canto[0][:, 0].mean())
-                        antes = anterior.get(carro)
-                        anterior[carro] = (x, agora)
+                    if antes is None or agora - antes[1] > INTERVALO_MAXIMO:
+                        continue
+                    x_antes, t_antes = antes
+                    if not x_antes < linha_x <= x:
+                        continue
 
-                        if antes is None or agora - antes[1] > INTERVALO_MAXIMO:
-                            continue
-                        x_antes, t_antes = antes
-                        if not x_antes < linha_x <= x:
-                            continue
+                    # Instante estimado em que o centro tocou a linha
+                    fracao = (linha_x - x_antes) / (x - x_antes)
+                    t = t_antes + fracao * (agora - t_antes)
 
-                        # Instante estimado em que o centro tocou a linha
-                        fracao = (linha_x - x_antes) / (x - x_antes)
-                        t = t_antes + fracao * (agora - t_antes)
-
-                        if carro not in inicio_volta:
-                            inicio_volta[carro] = t
-                            voltas[carro] = 0
-                            continue
-
-                        duracao = t - inicio_volta[carro]
-                        if duracao <= TEMPO_MINIMO_VOLTA:
-                            continue  # não reinicia o cronômetro
-
+                    if carro not in inicio_volta:
                         inicio_volta[carro] = t
-                        voltas[carro] += 1
-                        hora = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                        tempo = f"{duracao:.4f}"
-                        escritor.writerow([hora, "Video_ArUco", carro, voltas[carro], tempo])
-                        arquivo.flush()
-                        enviar_volta(carro, voltas[carro], tempo, hora)
+                        voltas[carro] = 0
+                        continue
 
-                if MOSTRAR_JANELA:
-                    if ids is not None:
-                        for canto in cantos:
-                            pontos = canto[0].astype(int) + (x0, 0)
-                            cv2.polylines(frame, [pontos], True, (0, 255, 0), 2)
-                    cv2.line(frame, (largura // 2, 0), (largura // 2, frame.shape[0]), (0, 0, 255), 1)
-                    cv2.imshow("Camera", frame)
-                    if cv2.waitKey(1) & 0xFF == ord("q"):
-                        break
+                    duracao = t - inicio_volta[carro]
+                    if duracao <= TEMPO_MINIMO_VOLTA:
+                        continue  # não reinicia o cronômetro
+
+                    inicio_volta[carro] = t
+                    voltas[carro] += 1
+                    hora = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    tempo = f"{duracao:.4f}"
+                    enviar_volta(carro, voltas[carro], tempo, hora)
+
+            if MOSTRAR_JANELA:
+                if ids is not None:
+                    for canto in cantos:
+                        pontos = canto[0].astype(int) + (x0, 0)
+                        cv2.polylines(frame, [pontos], True, (0, 255, 0), 2)
+                cv2.line(frame, (largura // 2, 0), (largura // 2, frame.shape[0]), (0, 0, 255), 1)
+                cv2.imshow("Camera", frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
     except KeyboardInterrupt:
         pass
     finally:

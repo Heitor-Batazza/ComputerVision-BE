@@ -51,7 +51,7 @@ function desenhar(carros) {
 
 async function atualizar() {
     try {
-        const resposta = await fetch("http://127.0.0.1:8000/voltas");
+        const resposta = await fetch("http://172.18.0.35:8000/voltas");
         if (!resposta.ok) return;
         desenhar(placar(await resposta.json()));
     } catch {
