@@ -1,15 +1,23 @@
-"""Servidor provisório para testar um POST entre dois computadores.
+"""Servidor das voltas do chronométrage.
 
-Esta pasta é um experimento. Apague experimentos/servidor_rede para removê-lo.
-Não ligue este servidor junto com teste_imagens.py: os dois usam a porta 8000.
-Ele escuta em todas as interfaces da rede local. Não exponha esta porta na internet.
+A câmera e os outros computadores da rede local enviam cada volta com POST /voltas.
+A lista fica só na memória e se perde quando o servidor é desligado.
+Ainda não há autenticação: use apenas na rede do laboratório.
 """
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI()
+# A página é aberta como arquivo local. Sem isto, o navegador bloqueia o GET /voltas.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 voltas = []
 
 

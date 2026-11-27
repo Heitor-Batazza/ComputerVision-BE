@@ -1,14 +1,12 @@
-import asyncio
 import csv
-import threading
+import json
 import time
-from contextlib import asynccontextmanager
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 import cv2
-import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 CAMERA = 0
 LARGURA, ALTURA, FPS = 1280, 720, 60
@@ -18,49 +16,29 @@ TEMPO_MINIMO_VOLTA = 1.5
 INTERVALO_MAXIMO = 0.25
 MOSTRAR_JANELA = True
 ARQUIVO_CSV = Path(__file__).resolve().parent / "data" / "resultados_video.csv"
-
-placar = []
-clientes = set()
-loop_servidor = None
-servidor_pronto = threading.Event()
+# O servidor deste computador escuta na rede, mas a câmera fala com ele por aqui.
+URL_VOLTAS = "http://127.0.0.1:8000/voltas"
 
 
-@asynccontextmanager
-async def ciclo_de_vida(app):
-    global loop_servidor
-    loop_servidor = asyncio.get_running_loop()
-    servidor_pronto.set()
-    yield
-
-
-app = FastAPI(lifespan=ciclo_de_vida)
-
-
-@app.websocket("/ws")
-async def conexao(websocket: WebSocket):
-    await websocket.accept()
-    fila = asyncio.Queue()
-    if placar:
-        fila.put_nowait(placar)
-    clientes.add(fila)
+def enviar_volta(carro, volta, tempo, hora):
+    corpo = json.dumps({
+        "metodo": "Video_ArUco",
+        "voiture": carro,
+        "tour": volta,
+        "tempo": tempo,
+        "heure": hora,
+    }).encode("utf-8")
+    pedido = urllib.request.Request(
+        URL_VOLTAS,
+        data=corpo,
+        headers={"Content-Type": "application/json"},
+    )
     try:
-        while True:
-            await websocket.send_json({"carros": await fila.get()})
-    except WebSocketDisconnect:
-        pass
-    finally:
-        clientes.discard(fila)
+        with urllib.request.urlopen(pedido, timeout=0.5) as resposta:
+            resposta.read()
+    except (urllib.error.URLError, TimeoutError) as erro:
+        print("Não foi possível enviar a volta:", erro)
 
-
-def distribuir(carros):
-    global placar
-    placar = carros
-    for fila in clientes:
-        fila.put_nowait(carros)
-
-
-def publicar(carros):
-    loop_servidor.call_soon_threadsafe(distribuir, carros)
 
 def abrir_camera():
     cap = cv2.VideoCapture(CAMERA, cv2.CAP_DSHOW)
@@ -77,25 +55,13 @@ def abrir_camera():
         cap.get(cv2.CAP_PROP_FRAME_HEIGHT), "a", cap.get(cv2.CAP_PROP_FPS), "FPS")
     return cap
 
+
 def rodar_camera():
     dicionario = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
     detector = cv2.aruco.ArucoDetector(dicionario, cv2.aruco.DetectorParameters())
     anterior = {}
     inicio_volta = {}
     voltas = {}
-    melhor_volta = {}
-    ultimo_tempo = {}
-    horario = {}
-
-    def classificacao():
-        ordem = sorted(voltas, key=lambda c: (-voltas[c], inicio_volta[c]))
-        return [{
-            "carro": c,
-            "volta": voltas[c],
-            "ultimo": f"{ultimo_tempo[c]:.3f}" if c in ultimo_tempo else "--",
-            "melhor": f"{melhor_volta[c]:.3f}" if c in melhor_volta else "--",
-            "horario": horario.get(c, "--"),
-        } for c in ordem]
 
     cap = abrir_camera()
     ARQUIVO_CSV.parent.mkdir(parents=True, exist_ok=True)
@@ -135,7 +101,6 @@ def rodar_camera():
                         if carro not in inicio_volta:
                             inicio_volta[carro] = t
                             voltas[carro] = 0
-                            publicar(classificacao())
                             continue
 
                         duracao = t - inicio_volta[carro]
@@ -144,13 +109,11 @@ def rodar_camera():
 
                         inicio_volta[carro] = t
                         voltas[carro] += 1
-                        melhor_volta[carro] = min(duracao, melhor_volta.get(carro, duracao))
-                        ultimo_tempo[carro] = duracao
-                        horario[carro] = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                        publicar(classificacao())
-                        escritor.writerow([horario[carro],
-                                        "Video_ArUco", carro, voltas[carro], f"{duracao:.4f}"])
+                        hora = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        tempo = f"{duracao:.4f}"
+                        escritor.writerow([hora, "Video_ArUco", carro, voltas[carro], tempo])
                         arquivo.flush()
+                        enviar_volta(carro, voltas[carro], tempo, hora)
 
                 if MOSTRAR_JANELA:
                     if ids is not None:
@@ -168,12 +131,5 @@ def rodar_camera():
         cv2.destroyAllWindows()
 
 
-def subir_servidor():
-    uvicorn.run(app, host="127.0.0.1", port=8000)
-
-
 if __name__ == "__main__":
-    threading.Thread(target=subir_servidor, daemon=True).start()
-    if not servidor_pronto.wait(timeout=10):
-        raise SystemExit("O servidor não iniciou. A porta 8000 está em uso?")
     rodar_camera()
